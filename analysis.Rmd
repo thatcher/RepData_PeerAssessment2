@@ -1,0 +1,283 @@
+---
+title: "Weather Events with the Greatest Human Health and Financial Impacts"
+author: "Chris Thatcher"
+date: "February 22, 2015"
+output: html_document
+---
+
+**Synopsis**
+
+> *While tornados clearly lead in fatalities, injuries and property damage, drought
+clearly has the greatest cost to crop producers.*
+
+## Introduction
+
+Storms and other severe weather events can cause both public health and economic problems for communities and municipalities. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern.
+
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+*Note: Introduction taken verbatim from courera assignment.*
+
+## Data
+
+The data for this analysis comes in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size. We downloaded the file from the course web site:
+
+[Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) [47Mb]
+
+There is also some documentation of the database available. Here you will find how some of the variables are constructed/defined.
+
+[National Weather Service Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+
+[National Climatic Data Center Storm Events FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+The events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. More recent years should be considered more complete.
+
+*Note: Data section taken verbatim from courera assignment.*
+
+In order to avoid duplicating the source data in our analysis repository, we check for it locally and only download it if it is not already available locally.  The source data is ignored by our analysis repository.
+```{r}
+library(data.table)
+DATA_URL = 'https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2'
+DATA_FILE = 'data/StormData.csv.bz2'
+
+# Make sure we have the data to work with locally, otherwise go get it.
+if( !file.exists(DATA_FILE) ){
+
+    message("Downloading data from url.")
+
+    if("Windows" == Sys.info()["sysname"])
+        download.file(DATA_URL, destfile=DATA_FILE)
+    else
+        download.file(DATA_URL, destfile=DATA_FILE, method="curl")
+
+} else {
+    message("Downloaded data found locally, not repeating.")
+}
+```
+
+## Data Processing
+
+```{r cache=TRUE}
+storm_data = read.csv(DATA_FILE)
+```
+
+We are only interested in a few fields from the data set, in particular:
+ * EVTYPE
+ * FATALITIES
+ * INJURIES
+ * PROPDMG
+ * PROPDMGEXP
+ * CROPDMG
+ * CROPDMGEXP
+ 
+The following allows us to filter down the original data set into just the fields
+we want to analyze.
+
+```{r cache=TRUE}
+columns = grep(
+    'EVTYPE|FATALITIES|INJURIES|DMG',
+    names(storm_data),
+    perl=TRUE
+)
+features = as.data.table(storm_data[,columns])
+str(features)
+```
+
+Here is a summary of the features we are interested in:
+```{r cache=TRUE}
+summary(features)
+```
+
+Its clear we need to clean up the fields that indicate property damage and crop 
+damage so we can quantify them more easily.  Right now, for example, the PROPDMGEXP 
+field indicates the magnitude of PROPDMG.  If PROPDMGEXP is k and PROPDMG is 125, then the actual property damage is 125k, eg $125,000. Below we translate PROPDMG and CROPDMG to property_damage and crop_damage in dollar amounts.
+
+#### Property Damage Exponents
+```{r}
+print(table(features$PROPDMGEXP))
+```
+#### Crop Damage Exponents
+```{r}
+print(table(features$CROPDMGEXP))
+```
+
+```{r}
+{
+    # Add the new numeric cost features and remove the old ones
+    to_dollars = function(damage, exp){
+        value = damage
+        if(exp == '' || exp == '-' || exp == '?' || exp == '+')
+            value = damage
+        if(exp == 'H' || exp == 'h')
+            value = damage * 100
+        else if(exp == 'K' || exp == 'k')
+            value = damage * 1000
+        else if (exp == 'M' || exp == 'm')
+            value = damage * 1000000
+        else if (exp == 'B' || exp == 'b')
+            value = damage * 1000000000
+        else
+            value = damage * 10^(as.numeric(exp))
+        return(value);
+    };
+    features[,PROPERTY_DAMAGE:=to_dollars(PROPDMG, PROPDMGEXP)]
+    features[,CROP_DAMAGE:=to_dollars(CROPDMG,CROPDMGEXP)]
+    features[,PROPDMG:=NULL]
+    features[,PROPDMGEXP:=NULL]
+    features[,CROPDMG:=NULL]
+    features[,CROPDMGEXP:=NULL]
+    summary(features)
+};
+
+```
+
+Also we only care about events that had a cost in terms of human injury, human death,
+property damage and crop damage.  After filtering out the weather events without
+costs, we sum them by event type, getting an overall cost per event type.
+
+```{r}
+costly_events = subset(
+    features, 
+    FATALITIES > 0 | INJURIES > 0 | PROPERTY_DAMAGE > 0 | CROP_DAMAGE > 0
+)
+total_cost_by_event = costly_events[ ,lapply(.SD, sum), by=c('EVTYPE')]
+summary(total_cost_by_event)
+
+```
+
+
+## Results
+
+### Human Costs
+
+First let us examine the most costly weather events in terms of human fatalities
+and injuries.
+
+```{r}
+top_fatalities = total_cost_by_event[order(-total_cost_by_event$FATALITIES)]
+all_fatalities = sum(total_cost_by_event$FATALITIES)
+top_injuries = total_cost_by_event[order(-total_cost_by_event$INJURIES)]
+all_injuries = sum(total_cost_by_event$INJURIES)
+```
+
+Our data includes a total of ```r round(all_fatalities/1000,2)``` thousand fatalities and a total of ```r round(all_injuries/1000,2)``` thousand injuries.  Here is a table of the top ten most costly weather events in terms of fatalities and injuries:
+
+#### Most Fatalities due to Weather Events
+```{r}
+head(top_fatalities, 10)
+```
+
+#### Most Injuries due to Weather Events
+```{r}
+head(top_injuries, 10)
+```
+
+#### Visualizing the Human Costs
+
+These simple pie charts help to illustrate the overwhelming signifigance of a
+few types of weather events.
+
+```{r, fig.width=10, fig.height=13}
+old.par = par(mfrow=c(2, 1))
+
+tryCatch({
+    
+    event_labels = paste(
+        top_fatalities$EVTYPE, 
+        "(", round(top_fatalities$FATALITIES/all_fatalities*100, 1), "%)",
+        sep=""
+    )
+    pie(
+        top_fatalities$FATALITIES[1:10],
+        labels=event_labels[1:10],
+        main=sprintf("Top 10 Weather Events for %s Fatalities", all_fatalities),
+        col=rainbow(10)
+    )
+    event_labels = paste(
+        top_injuries$EVTYPE, 
+        "(", round(top_injuries$INJURIES/all_injuries*100, 1), "%)",
+        sep=""
+    )
+    pie(
+        top_injuries$INJURIES[1:10],
+        labels=event_labels[1:10],
+        main=sprintf("Top 10 Weather Events for %s Injuries", all_injuries),
+        col=rainbow(10)
+    )
+}, finally={
+    # Reset par values
+    par(old.par)
+})
+
+```
+
+### Financial Costs
+
+Although the human costs are difficult to fully quantify a dollars and cents, 
+the cost to property owners and farmers is certainly something we can examine in
+terms of its impact on our economy.
+
+```{r}
+top_property_damage = total_cost_by_event[order(-total_cost_by_event$PROPERTY_DAMAGE)]
+all_property_damage = sum(total_cost_by_event$PROPERTY_DAMAGE)
+top_crop_damage = total_cost_by_event[order(-total_cost_by_event$CROP_DAMAGE)]
+all_crop_damage = sum(total_cost_by_event$CROP_DAMAGE)
+```
+
+Our data includes a total of $```r round(all_property_damage/1000000000,2)``` billion in property damage and a total of
+$```r round(all_crop_damage/1000000000000,2)``` trillion in crop damage.  Here is a table of the top ten most costly weather events
+in terms of property and crop damage:
+
+#### Most Property Damage due to Weather Events
+```{r}
+head(top_property_damage, 10)
+```
+
+#### Most Crop Damage due to Weather Events
+```{r}
+head(top_crop_damage, 10)
+```
+#### Visualizing the Financial Costs
+
+These simple pie charts help to illustrate the overwhelming signifigance of a
+few types of weather events.
+
+```{r, fig.width=10, fig.height=13}
+old.par = par(mfrow=c(2, 1))
+
+tryCatch({
+    
+    event_labels = paste(
+        top_property_damage$EVTYPE, 
+        "(", round(top_property_damage$PROPERTY_DAMAGE/all_property_damage*100, 1), "%)",
+        sep=""
+    )
+    pie(
+        top_property_damage$PROPERTY_DAMAGE[1:10],
+        labels=event_labels[1:10],
+        main=sprintf(
+            "Top 10 Weather Events for $%s Billion in Property Damage ", 
+            round(all_property_damage/1000000000,2)
+        ),
+        col=rainbow(10)
+    )
+    event_labels = paste(
+        top_crop_damage$EVTYPE, 
+        "(", round(top_crop_damage$CROP_DAMAGE/all_crop_damage*100, 1), "%)",
+        sep=""
+    )
+    pie(
+        top_crop_damage$CROP_DAMAGE[1:10],
+        labels=event_labels[1:10],
+        main=sprintf(
+            "Top 10 Weather Events for $%s Trillion in Crop Damage", 
+            round(all_crop_damage/1000000000000,2)
+        ),
+        col=rainbow(10)
+    )
+}, finally={
+    # Reset par values
+    par(old.par)
+})
+
+```
